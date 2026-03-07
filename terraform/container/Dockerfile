@@ -1,7 +1,11 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-RUN pip install --no-cache-dir --upgrade transformers fastapi uvicorn httpx
+# apertus model type is not yet in any released transformers version;
+# install from the main branch which already has the architecture registered.
+RUN pip install --no-cache-dir \
+    git+https://github.com/huggingface/transformers.git \
+    fastapi uvicorn httpx
 
 COPY serve.py /opt/serve.py
 COPY entrypoint.sh /opt/entrypoint.sh
