@@ -27,18 +27,12 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
-      # Login to HuggingFace DLC registry for base image pull
-      - name: Login to HuggingFace ECR
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
-            docker login --username AWS --password-stdin 763104351884.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
-
       - name: Build and push
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: teuken-llm-inference
+          REPO: apertus-llm-inference
           TAG: ${{ github.sha }}
-          BASE_IMAGE: 763104351884.dkr.ecr.eu-central-1.amazonaws.com/huggingface-pytorch-tgi-inference:2.7.0-tgi3.3.6-gpu-py311-cu124-ubuntu22.04
+          BASE_IMAGE: vllm/vllm-openai:v0.9.0
         run: |
           docker build \
             --platform=linux/amd64 \
