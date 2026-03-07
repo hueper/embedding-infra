@@ -23,51 +23,6 @@ data "archive_file" "start_endpoint" {
 }
 
 # -----------------------------------------------------------------------------
-# State migration: lifecycle resources moved from conditional (count) to always-on.
-# These blocks can be removed after one successful apply in all environments.
-# -----------------------------------------------------------------------------
-
-moved {
-  from = data.archive_file.stop_endpoint[0]
-  to   = data.archive_file.stop_endpoint
-}
-
-moved {
-  from = data.archive_file.start_endpoint[0]
-  to   = data.archive_file.start_endpoint
-}
-
-moved {
-  from = aws_iam_role.endpoint_scheduler[0]
-  to   = aws_iam_role.endpoint_scheduler
-}
-
-moved {
-  from = aws_iam_role_policy.endpoint_scheduler[0]
-  to   = aws_iam_role_policy.endpoint_scheduler
-}
-
-moved {
-  from = aws_cloudwatch_log_group.stop_endpoint[0]
-  to   = aws_cloudwatch_log_group.stop_endpoint
-}
-
-moved {
-  from = aws_cloudwatch_log_group.start_endpoint[0]
-  to   = aws_cloudwatch_log_group.start_endpoint
-}
-
-moved {
-  from = aws_lambda_function.stop_endpoint[0]
-  to   = aws_lambda_function.stop_endpoint
-}
-
-moved {
-  from = aws_lambda_function.start_endpoint[0]
-  to   = aws_lambda_function.start_endpoint
-}
-
-# -----------------------------------------------------------------------------
 # IAM Role for Lambda
 # -----------------------------------------------------------------------------
 

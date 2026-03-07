@@ -1,18 +1,11 @@
 #!/bin/bash
 set -e
 
-if [ -n "$HF_TOKEN_SECRET_ARN" ]; then
-  echo "Fetching HuggingFace token from Secrets Manager..."
-  export HF_TOKEN=$(aws secretsmanager get-secret-value \
-    --secret-id "$HF_TOKEN_SECRET_ARN" \
-    --query 'SecretString' \
-    --output text \
-    --region "${AWS_REGION:-eu-central-1}")
-fi
+python -m vllm.entrypoints.openai.api_server \
+  --model "${HF_MODEL_ID}" \
+  --tensor-parallel-size "${SM_NUM_GPUS:-8}" \
+  --port 8000 \
+  --max-model-len 32768 \
+  --dtype bfloat16 &
 
-exec /usr/local/bin/text-generation-launcher \
-  --model-id "${HF_MODEL_ID}" \
-  --num-shard "${SM_NUM_GPUS:-1}" \
-  --port 8080 \
-  --max-input-length 4096 \
-  --max-total-tokens 5120
+exec python /opt/serve.py

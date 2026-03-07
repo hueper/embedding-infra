@@ -16,21 +16,10 @@ provider "aws" {
 }
 
 # -----------------------------------------------------------------------------
-# Secrets Manager for HuggingFace Token
-# -----------------------------------------------------------------------------
-
-# Secret placeholder - value must be set manually in AWS Console or CLI
-# This ensures the token never appears in Terraform state
-resource "aws_secretsmanager_secret" "hf_token" {
-  name        = "${var.project_name}/hf-token"
-  description = "HuggingFace API token for gated model access. Set value manually."
-}
-
-# -----------------------------------------------------------------------------
 # ECR Repository for Custom Container
 # -----------------------------------------------------------------------------
 
-resource "aws_ecr_repository" "teuken_inference" {
+resource "aws_ecr_repository" "apertus_inference" {
   name                 = "${var.project_name}-inference"
   image_tag_mutability = "IMMUTABLE"
   force_delete         = true
@@ -72,10 +61,7 @@ resource "aws_iam_role_policy" "sagemaker_execution" {
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage"
         ]
-        Resource = [
-          "arn:aws:ecr:${var.aws_region}:763104351884:repository/*",
-          aws_ecr_repository.teuken_inference.arn
-        ]
+        Resource = [aws_ecr_repository.apertus_inference.arn]
       },
       {
         Sid      = "ECRAuth"
@@ -93,14 +79,6 @@ resource "aws_iam_role_policy" "sagemaker_execution" {
           "logs:DescribeLogStreams"
         ]
         Resource = "arn:aws:logs:${var.aws_region}:*:log-group:/aws/sagemaker/*"
-      },
-      {
-        Sid    = "SecretsManagerRead"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = aws_secretsmanager_secret.hf_token.arn
       }
     ]
   })
@@ -113,59 +91,50 @@ resource "time_sleep" "iam_propagation" {
 }
 
 # SageMaker Model
-resource "aws_sagemaker_model" "teuken" {
-  name               = "${var.project_name}-teuken-7b"
+resource "aws_sagemaker_model" "apertus" {
+  name               = "${var.project_name}-apertus-70b"
   execution_role_arn = aws_iam_role.sagemaker_role.arn
   depends_on         = [time_sleep.iam_propagation]
 
   primary_container {
-    # Custom image that fetches HF_TOKEN from Secrets Manager at runtime
-    image = "${aws_ecr_repository.teuken_inference.repository_url}:${var.image_tag}"
+    image = "${aws_ecr_repository.apertus_inference.repository_url}:${var.image_tag}"
     environment = {
-      HF_MODEL_ID              = "openGPT-X/Teuken-7B-instruct-v0.6"
-      HF_TOKEN_SECRET_ARN      = aws_secretsmanager_secret.hf_token.arn
-      AWS_REGION               = var.aws_region
-      SM_NUM_GPUS              = "1"
-      TRUST_REMOTE_CODE        = "true"
-      HF_HUB_TRUST_REMOTE_CODE = "true"
+      HF_MODEL_ID = "swiss-ai/Apertus-70B-Instruct-2509"
+      AWS_REGION  = var.aws_region
+      SM_NUM_GPUS = "8"
     }
   }
 }
 
-# The endpoint is intentionally ephemeral: created/deleted by the Lambda scheduler.
+# The endpoint is intentionally ephemeral: created/deleted by the Lambda functions.
 # Terraform manages the endpoint configuration but NOT the endpoint itself.
 # BOOTSTRAP: After first `terraform apply`, create the endpoint by invoking:
-#   aws lambda invoke --function-name teuken-llm-start-endpoint --payload '{}' /dev/stdout
+#   aws lambda invoke --function-name apertus-llm-start-endpoint --payload '{}' /dev/stdout
 locals {
-  endpoint_name        = "${var.project_name}-teuken-endpoint"
-  endpoint_config_name = aws_sagemaker_endpoint_configuration.teuken.name
+  endpoint_name        = "${var.project_name}-apertus-endpoint"
+  endpoint_config_name = aws_sagemaker_endpoint_configuration.apertus.name
 }
 
 # SageMaker Endpoint Configuration
-resource "aws_sagemaker_endpoint_configuration" "teuken" {
-  name = "${var.project_name}-teuken-config"
+resource "aws_sagemaker_endpoint_configuration" "apertus" {
+  name = "${var.project_name}-apertus-config"
 
   production_variants {
-    variant_name                           = "primary"
-    model_name                             = aws_sagemaker_model.teuken.name
-    initial_instance_count                 = 1
-    instance_type                          = var.instance_type
+    variant_name                                      = "primary"
+    model_name                                        = aws_sagemaker_model.apertus.name
+    initial_instance_count                            = 1
+    instance_type                                     = var.instance_type
     container_startup_health_check_timeout_in_seconds = 900
   }
 }
 
 # Outputs
 output "endpoint_name" {
-  description = "SageMaker endpoint name (lifecycle managed by Lambda scheduler, not Terraform)"
+  description = "SageMaker endpoint name (lifecycle managed by Lambda, not Terraform)"
   value       = local.endpoint_name
-}
-
-output "hf_token_secret_arn" {
-  description = "ARN of the Secrets Manager secret containing the HuggingFace token"
-  value       = aws_secretsmanager_secret.hf_token.arn
 }
 
 output "ecr_repository_url" {
   description = "ECR repository URL for the custom inference image"
-  value       = aws_ecr_repository.teuken_inference.repository_url
+  value       = aws_ecr_repository.apertus_inference.repository_url
 }

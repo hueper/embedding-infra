@@ -5,12 +5,12 @@ variable "aws_region" {
 
 variable "project_name" {
   description = "Project name prefix for resources"
-  default     = "teuken-llm"
+  default     = "apertus-llm"
 }
 
 variable "instance_type" {
   description = "SageMaker instance type"
-  default     = "ml.g5.2xlarge"
+  default     = "ml.g5.48xlarge"
 }
 
 variable "image_tag" {
