@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-python -m vllm.entrypoints.openai.api_server \
+python3 -m vllm.entrypoints.openai.api_server \
   --model "${HF_MODEL_ID}" \
   --tensor-parallel-size "${SM_NUM_GPUS:-8}" \
   --port 8000 \
   --max-model-len 32768 \
   --dtype bfloat16 &
 
-exec python /opt/serve.py
+exec python3 /opt/serve.py
