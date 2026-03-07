@@ -1,7 +1,7 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-RUN pip install --no-cache-dir fastapi uvicorn httpx
+RUN pip install --no-cache-dir "transformers>=4.56.0" fastapi uvicorn httpx
 
 COPY serve.py /opt/serve.py
 COPY entrypoint.sh /opt/entrypoint.sh
