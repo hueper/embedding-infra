@@ -14,7 +14,7 @@ def lambda_handler(event, context):
     """
     endpoint_name = os.environ["ENDPOINT_NAME"]
     endpoint_config_name = os.environ["ENDPOINT_CONFIG_NAME"]
-    region = os.environ.get("AWS_REGION", "eu-central-1")
+    region = os.environ.get("AWS_REGION", "us-east-1")
 
     sagemaker = boto3.client("sagemaker", region_name=region)
 
