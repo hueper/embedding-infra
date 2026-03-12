@@ -32,7 +32,7 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           REPO: apertus-llm-inference
           TAG: ${{ github.sha }}
-          BASE_IMAGE: vllm/vllm-openai:v0.9.1
+          BASE_IMAGE: vllm/vllm-openai:v0.17.1
         run: |
           docker build \
             --platform=linux/amd64 \
