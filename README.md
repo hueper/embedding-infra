@@ -21,7 +21,7 @@ The SageMaker endpoint is **ephemeral** — created and deleted by the Lambda fu
 
 The model is open-weight (Apache 2.0) — no HuggingFace token required.
 
-Container images are built by CI using `vllm/vllm-openai` as base and tagged with the Git SHA. Local Docker builds are not required.
+Container images are built by CI using `vllm/vllm-openai:v0.11.0` as base and tagged with the Git SHA. Local Docker builds are not required.
 
 ## CI Build Environment
 
@@ -109,7 +109,7 @@ terraform destroy
 |---|---|---|
 | `image_tag` | *(required)* | Container image tag (Git SHA from CI) |
 | `github_repo` | *(required)* | GitHub repository (org/repo) for OIDC trust |
-| `aws_region` | `eu-central-1` | AWS region |
+| `aws_region` | `us-east-1` | AWS region |
 | `instance_type` | `ml.g5.48xlarge` | SageMaker GPU instance (8× A10G) |
 | `enable_endpoint_scheduler` | `false` | EventBridge cron scheduling (Lambdas always deployed) |
 | `endpoint_start_schedule` | `cron(0 7 ? * MON-FRI *)` | Start time (UTC) |
