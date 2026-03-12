@@ -8,6 +8,7 @@ Input  (POST /invocations): {"inputs": "...", "parameters": {"max_new_tokens": .
 Output (POST /invocations): {"generated_text": "..."}
 """
 
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ from contextlib import asynccontextmanager
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 VLLM_BASE = "http://localhost:8000"
 MODEL_NAME = os.environ.get("HF_MODEL_ID", "swiss-ai/Apertus-70B-Instruct-2509")
@@ -83,6 +84,51 @@ def invocations(body: dict):
     result = r.json()
     generated_text = result["choices"][0]["message"]["content"]
     return {"generated_text": generated_text}
+
+
+@app.post("/invocations-response-stream")
+async def invocations_stream(body: dict):
+    prompt = body.get("inputs", "")
+    params = body.get("parameters", {})
+
+    messages = [{"role": "user", "content": prompt}]
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "max_tokens": params.get("max_new_tokens", 256),
+        "temperature": params.get("temperature", 0.8),
+        "top_p": params.get("top_p", 0.9),
+        "stream": True,
+    }
+
+    stop = params.get("stop_sequences") or params.get("stop")
+    if stop:
+        payload["stop"] = stop
+
+    async def stream_response():
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                f"{VLLM_BASE}/v1/chat/completions",
+                json=payload,
+                timeout=300,
+            ) as r:
+                async for line in r.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        content = obj["choices"][0]["delta"].get("content", "")
+                        if content:
+                            yield content.encode()
+                    except Exception:
+                        pass
+
+    return StreamingResponse(stream_response(), media_type="text/plain")
 
 
 if __name__ == "__main__":
