@@ -96,7 +96,7 @@ resource "aws_cloudwatch_log_group" "start_endpoint" {
 
 resource "aws_lambda_function" "stop_endpoint" {
   function_name = "${var.project_name}-stop-endpoint"
-  description   = "Stops (deletes) the SageMaker endpoint to save costs"
+  description   = "Stops (deletes) the SageMaker embedding endpoint to save costs"
   role          = aws_iam_role.endpoint_scheduler.arn
   handler       = "stop_endpoint.lambda_handler"
   runtime       = var.lambda_runtime
@@ -120,7 +120,7 @@ resource "aws_lambda_function" "stop_endpoint" {
 
 resource "aws_lambda_function" "start_endpoint" {
   function_name = "${var.project_name}-start-endpoint"
-  description   = "Starts (creates) the SageMaker endpoint using existing config"
+  description   = "Starts (creates) the SageMaker embedding endpoint using existing config"
   role          = aws_iam_role.endpoint_scheduler.arn
   handler       = "start_endpoint.lambda_handler"
   runtime       = var.lambda_runtime
@@ -150,14 +150,14 @@ resource "aws_lambda_function" "start_endpoint" {
 resource "aws_cloudwatch_event_rule" "stop_endpoint" {
   count               = var.enable_endpoint_scheduler ? 1 : 0
   name                = "${var.project_name}-stop-endpoint-schedule"
-  description         = "Triggers Lambda to stop SageMaker endpoint outside business hours"
+  description         = "Triggers Lambda to stop SageMaker embedding endpoint outside business hours"
   schedule_expression = var.endpoint_stop_schedule
 }
 
 resource "aws_cloudwatch_event_rule" "start_endpoint" {
   count               = var.enable_endpoint_scheduler ? 1 : 0
   name                = "${var.project_name}-start-endpoint-schedule"
-  description         = "Triggers Lambda to start SageMaker endpoint during business hours"
+  description         = "Triggers Lambda to start SageMaker embedding endpoint during business hours"
   schedule_expression = var.endpoint_start_schedule
 }
 

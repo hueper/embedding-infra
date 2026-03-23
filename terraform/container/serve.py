@@ -1,127 +1,99 @@
 """
-SageMaker ↔ vLLM adapter.
+SageMaker inference adapter for intfloat/multilingual-e5-large.
 
-SageMaker sends inference requests to /invocations and health checks to /ping.
-vLLM serves an OpenAI-compatible API on port 8000. This adapter bridges the two.
+Contract:
+  GET  /ping         → {"status": "healthy"}  (SageMaker health check)
+  POST /invocations  → embed a batch of texts
 
-Input  (POST /invocations): {"inputs": "...", "parameters": {"max_new_tokens": ..., "stream": true/false, ...}}
-Output (POST /invocations): {"generated_text": "..."} or streaming text/plain tokens when stream=true
+Request body:
+  {
+    "texts": ["passage: first text", "passage: second text"],
+    "batch_size": 32
+  }
+
+Response body:
+  {
+    "embeddings": [[0.123, -0.456, ...], ...],  # list of float lists
+    "dim": 1024
+  }
+
+Caller conventions:
+  - Prefix documents with "passage: " at ingest time (chunker_service.py)
+  - Prefix queries   with "query: "   at retrieval time (rag_backend.py)
+  This asymmetric prefix is required by multilingual-e5-large's training objective
+  and significantly improves retrieval precision.
+
+Embeddings are L2-normalized (unit vectors), so cosine similarity == dot product.
 """
 
-import json
 import os
-import time
+import logging
 from contextlib import asynccontextmanager
 
-import httpx
-import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
 
-VLLM_BASE = "http://localhost:8000"
-MODEL_NAME = os.environ.get("HF_MODEL_ID", "swiss-ai/Apertus-70B-Instruct-2509")
+logger = logging.getLogger("embedding-serve")
+logging.basicConfig(level=logging.INFO)
 
+MODEL_NAME = os.environ.get("MODEL_NAME", "intfloat/multilingual-e5-large")
 
-def _wait_for_vllm(timeout: int = 600, interval: int = 5) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            r = httpx.get(f"{VLLM_BASE}/health", timeout=5)
-            if r.status_code == 200:
-                print("vLLM is ready.")
-                return
-        except Exception:
-            pass
-        print("Waiting for vLLM...")
-        time.sleep(interval)
-    raise RuntimeError("vLLM did not become ready in time.")
+# Load model at startup — weights are baked into the image so this is fast
+model: SentenceTransformer | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _wait_for_vllm()
+    global model
+    logger.info(f"Loading model: {MODEL_NAME}")
+    model = SentenceTransformer(MODEL_NAME)
+    logger.info(f"Model loaded. Embedding dim: {model.get_sentence_embedding_dimension()}")
     yield
+    model = None
 
 
 app = FastAPI(lifespan=lifespan)
 
 
+class EmbedRequest(BaseModel):
+    texts: list[str]
+    batch_size: int = 32
+
+
 @app.get("/ping")
 def ping():
+    """SageMaker health check endpoint."""
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
     return JSONResponse({"status": "healthy"})
 
 
 @app.post("/invocations")
-async def invocations(body: dict):
-    prompt = body.get("inputs", "")
-    params = body.get("parameters", {})
+def invocations(request: EmbedRequest):
+    """
+    Embed a batch of texts. Returns L2-normalized vectors.
+    Expected input size: up to 512 tokens per text (multilingual-e5-large limit).
+    Typical batch: 32 chunks of ~400 tokens each.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
 
-    messages = [{"role": "user", "content": prompt}]
-
-    if params.get("stream", False):
-        payload = {
-            "model": MODEL_NAME,
-            "messages": messages,
-            "max_tokens": params.get("max_new_tokens", 256),
-            "temperature": params.get("temperature", 0.8),
-            "top_p": params.get("top_p", 0.9),
-            "stream": True,
-        }
-        stop = params.get("stop_sequences") or params.get("stop")
-        if stop:
-            payload["stop"] = stop
-
-        async def stream_response():
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    f"{VLLM_BASE}/v1/chat/completions",
-                    json=payload,
-                    timeout=300,
-                ) as r:
-                    async for line in r.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            obj = json.loads(data)
-                            content = obj["choices"][0]["delta"].get("content", "")
-                            if content:
-                                yield content.encode()
-                        except Exception:
-                            pass
-
-        return StreamingResponse(stream_response(), media_type="text/plain")
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages,
-        "max_tokens": params.get("max_new_tokens", 256),
-        "temperature": params.get("temperature", 0.8),
-        "top_p": params.get("top_p", 0.9),
-        "repetition_penalty": params.get("repetition_penalty", 1.0),
-    }
-
-    stop = params.get("stop_sequences") or params.get("stop")
-    if stop:
-        payload["stop"] = stop
+    if not request.texts:
+        raise HTTPException(status_code=400, detail="texts list is empty")
 
     try:
-        r = httpx.post(
-            f"{VLLM_BASE}/v1/chat/completions",
-            json=payload,
-            timeout=120,
+        embeddings = model.encode(
+            request.texts,
+            batch_size=request.batch_size,
+            normalize_embeddings=True,  # L2-normalize so cosine sim == dot product
+            show_progress_bar=False,
         )
-        r.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    result = r.json()
-    generated_text = result["choices"][0]["message"]["content"]
-    return {"generated_text": generated_text}
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+        return JSONResponse({
+            "embeddings": embeddings.tolist(),
+            "dim": embeddings.shape[1],
+        })
+    except Exception as e:
+        logger.error(f"Embedding failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

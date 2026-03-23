@@ -1,116 +1,210 @@
-# Infrastructure — Apertus-70B on SageMaker
+# embedding-infra
 
-Terraform configuration for deploying the [Apertus-70B-Instruct-2509](https://huggingface.co/swiss-ai/Apertus-70B-Instruct-2509) model on AWS SageMaker with automated cost scheduling.
+SageMaker inference endpoint for `intfloat/multilingual-e5-large` — converts text into dense vectors for semantic similarity search.
+
+| | |
+|---|---|
+| **Model** | `intfloat/multilingual-e5-large` (560M params, 1024-dim, Apache 2.0) |
+| **Instance** | `ml.g5.xlarge` (24 GB GPU, ~$1.10/hr in eu-central-1) |
+| **Region** | `eu-central-1` |
+| **Endpoint lifecycle** | Ephemeral — created/deleted by Lambda; Terraform manages config only |
 
 ## Architecture
 
+Follows the same pattern as `apertus-70b-infra/`:
+
 ```
-SageMaker Endpoint (ml.g5.48xlarge) ← Endpoint Config ← Model ← Custom vLLM container (ECR)
-
-Lambda lifecycle (always deployed)
-  start: aws lambda invoke --function-name apertus-llm-start-endpoint
-  stop:  aws lambda invoke --function-name apertus-llm-stop-endpoint
-
-EventBridge scheduling (optional, enable_endpoint_scheduler=true)
-  start: 7 AM UTC Mon–Fri    stop: 6 PM UTC Mon–Fri
-
-GitHub Actions (OIDC) → builds and pushes container image to ECR on merge to main
+ECR image → SageMaker Model → Endpoint Config
+                                    ↓
+                          Lambda start/stop (always deployed)
+                                    ↓
+                          EventBridge scheduler (optional, weekday 7–18 UTC)
 ```
-
-The SageMaker endpoint is **ephemeral** — created and deleted by the Lambda functions to avoid idle costs (~$16.29/hr). It is not tracked in Terraform state. The start/stop Lambdas are always deployed for manual invocation; EventBridge cron scheduling is an optional layer controlled by `enable_endpoint_scheduler`. Everything else (model, endpoint config, ECR, IAM, Lambdas) is long-lived and Terraform-managed.
-
-The model is open-weight (Apache 2.0) — no HuggingFace token required.
-
-Container images are built by CI using `vllm/vllm-openai:v0.11.0` as base and tagged with the Git SHA. Local Docker builds are not required.
-
-## CI Build Environment
-
-The container image is large (~30–40 GB unpacked).
-Building it on GitHub-hosted runners may fail due to disk limits.
-
-In production, this repository is built using a **self-hosted GitHub Actions runner**
-(EC2 with large disk, long-lived CI infrastructure).
-
-If you encounter `no space left on device` errors in CI, switch the workflow to a
-self-hosted runner.
 
 ## Prerequisites
 
-- AWS CLI configured with appropriate credentials
-- Terraform >= 1.0
+1. The GitHub Actions OIDC provider must exist in this AWS account. It was likely already created by `apertus-70b-infra`. If not, set `create_github_oidc_provider = true` in your tfvars.
+2. Add `EMBEDDING_AWS_ROLE_ARN` as a GitHub Actions secret (output from `terraform apply`).
 
-## Deploy
+---
+
+## Deployment
+
+### 0. First-time bootstrap
+
+The ECR repository must exist before CI can push to it, but Terraform needs an `image_tag` to create the SageMaker model. On first deploy:
 
 ```bash
-cd terraform
-
-# 1. Provision base infrastructure (creates ECR, OIDC provider, CI role)
+# 1. Create ECR repo and all other resources with a placeholder image tag
+cd embedding-infra/terraform
 terraform init
 terraform apply \
-  -target=aws_ecr_repository.apertus_inference \
-  -target=aws_iam_openid_connect_provider.github \
-  -target=aws_iam_role.github_actions \
-  -target=aws_iam_role_policy.github_actions_ecr
+  -var="image_tag=placeholder" \
+  -var="github_repo=<org>/<repo>"
 
-# 2. Set AWS_ROLE_ARN secret in GitHub repo settings
-#    (value from: terraform output github_actions_role_arn)
+# 2. Add the role ARN output as a GitHub Actions secret
+terraform output github_actions_role_arn
+# → add as EMBEDDING_AWS_ROLE_ARN in GitHub repo settings
 
-# 3. Push to main (or trigger workflow manually) to build the image
+# 3. Push to GitHub and trigger the workflow (or run manually)
+gh workflow run build-image.yml -R <org>/<repo>
 
-# 4. Provision remaining infrastructure with the image tag from CI
-terraform apply -var="image_tag=<git-sha>"
-# Optionally enable EventBridge scheduling (auto start/stop Mon–Fri):
-# terraform apply -var="image_tag=<git-sha>" -var="enable_endpoint_scheduler=true"
-
-# 5. Start the endpoint
-aws lambda invoke --function-name apertus-llm-start-endpoint --payload '{}' response.json
-# (if enable_endpoint_scheduler=true, EventBridge will handle subsequent start/stop automatically)
+# 4. Once the workflow completes, re-apply with the real image tag
+terraform apply \
+  -var="image_tag=<git-sha-from-step-3>" \
+  -var="github_repo=<org>/<repo>"
 ```
 
-> **Note:** The `-target` apply in step 1 is a one-time bootstrap to break the circular dependency (CI needs ECR + OIDC role to push, Terraform needs an image tag to create the model). After the first image is pushed, all subsequent deploys use a normal `terraform apply`.
+After this, subsequent deploys only need steps 3 and 4 (push → apply → cycle endpoint).
 
-The endpoint takes ~10–15 minutes to reach `InService`.
+---
 
-## Structure
+### 1. Build and push the container image
 
-```
-infra/
-├── .github/workflows/
-│   └── build-image.yml  CI: build and push container image to ECR
-├── terraform/
-│   ├── main.tf          Model, endpoint config, ECR, IAM
-│   ├── lambda.tf        Endpoint lifecycle (Lambda always-on + optional EventBridge)
-│   ├── ci.tf            GitHub OIDC provider + CI IAM role
-│   ├── variables.tf
-│   ├── container/       Dockerfile + entrypoint (vLLM) + SageMaker adapter
-│   └── lambda/          Start/stop Lambda handlers
-```
+The image (~3 GB) bakes in the model weights at build time. Trigger via GitHub Actions push to main, or manually (same command as bootstrap step 3).
 
-## Full Shutdown / Destroy
+### 2. Apply Terraform
 
-To permanently shut down the system and ensure the endpoint cannot be recreated:
+Same as bootstrap step 4, substituting the real image tag from CI.
+
+### 3. Start the endpoint
+
+The endpoint is not created by Terraform. Start it manually after the first apply:
 
 ```bash
-cd terraform
-
-# 1. Disable automatic scheduling (removes EventBridge rules; Lambdas remain for manual use)
-terraform apply -var="enable_endpoint_scheduler=false"
-
-# 2. Delete the endpoint (if running)
-aws sagemaker delete-endpoint --endpoint-name apertus-llm-apertus-endpoint
-
-# 3. Destroy all remaining Terraform-managed resources
-terraform destroy
+aws lambda invoke \
+  --function-name embedding-start-endpoint \
+  --region eu-central-1 \
+  --payload '{}' \
+  /dev/stdout
 ```
 
-## Configuration
+Wait ~8 minutes for `InService` status:
+```bash
+aws sagemaker describe-endpoint \
+  --endpoint-name embedding-embedding-endpoint \
+  --region eu-central-1 \
+  --query 'EndpointStatus'
+```
 
-| Variable | Default | Description |
-|---|---|---|
-| `image_tag` | *(required)* | Container image tag (Git SHA from CI) |
-| `github_repo` | *(required)* | GitHub repository (org/repo) for OIDC trust |
-| `aws_region` | `us-east-1` | AWS region |
-| `instance_type` | `ml.g5.48xlarge` | SageMaker GPU instance (8× A10G) |
-| `enable_endpoint_scheduler` | `false` | EventBridge cron scheduling (Lambdas always deployed) |
-| `endpoint_start_schedule` | `cron(0 7 ? * MON-FRI *)` | Start time (UTC) |
-| `endpoint_stop_schedule` | `cron(0 18 ? * MON-FRI *)` | Stop time (UTC) |
+### 4. Validate — functional + GPU check
+
+**Functional check** (embedding shape and normalization):
+```bash
+aws sagemaker-runtime invoke-endpoint \
+  --endpoint-name embedding-embedding-endpoint \
+  --content-type application/json \
+  --region eu-central-1 \
+  --body '{"texts":["passage: This is a test sentence."],"batch_size":1}' \
+  /tmp/embedding_out.json && python3 -c "
+import json
+r = json.load(open('/tmp/embedding_out.json'))
+emb = r['embeddings'][0]
+print(f'dim={len(emb)}, first3={emb[:3]}, norm={sum(x**2 for x in emb)**0.5:.4f}')
+"
+# Expected: dim=1024, norm≈1.0 (L2-normalized vectors)
+```
+
+**GPU check** — run this inside the container or via SageMaker exec to confirm the model is not silently running on CPU:
+```bash
+# From inside the container (docker run or SageMaker exec):
+python3.11 -c "
+import torch
+from sentence_transformers import SentenceTransformer
+m = SentenceTransformer('intfloat/multilingual-e5-large')
+device = next(m.parameters()).device
+print(f'Model device: {device}')
+assert str(device) != 'cpu', 'ERROR: model is on CPU, not GPU'
+print('GPU confirmed')
+"
+# Expected: Model device: cuda:0
+```
+
+If the model lands on CPU, the container starts and `/ping` returns healthy, but embedding throughput will be ~10–20x slower and the endpoint will timeout on large batches. Fix: verify the CUDA base image version matches the SageMaker instance's CUDA driver version (ml.g5.xlarge ships with CUDA 12.x drivers — if there's a mismatch, upgrade the base image to `nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04` and torch to `torch==2.2.0`).
+
+---
+
+## ⚠️ Deploying a new image version
+
+`terraform apply` creates a new SageMaker Model + Endpoint Config but does **not** update a running endpoint. After every image push + `terraform apply`:
+
+```
+terraform apply → green ✓  ← does NOT mean the new image is live
+```
+
+**You must cycle the endpoint manually:**
+```bash
+# 1. Stop (delete) the running endpoint
+aws lambda invoke \
+  --function-name embedding-stop-endpoint \
+  --region eu-central-1 \
+  --payload '{}' /dev/stdout
+
+# 2. Wait for deletion (~30s), then start with the new config
+aws lambda invoke \
+  --function-name embedding-start-endpoint \
+  --region eu-central-1 \
+  --payload '{}' /dev/stdout
+
+# 3. Confirm the new image tag is live
+aws sagemaker describe-endpoint \
+  --endpoint-name embedding-embedding-endpoint \
+  --region eu-central-1 \
+  --query 'ProductionVariants[0].CurrentInstanceCount'
+```
+
+This is intentional — the endpoint is ephemeral and Terraform deliberately does not manage it to avoid accidental mid-traffic recreation.
+
+---
+
+## Endpoint state contract for callers
+
+Expected behaviour per endpoint state:
+
+| `describe_endpoint` result | Caller behaviour |
+|---|---|
+| `InService` | Proceed with embedding calls |
+| `Creating` or `Updating` | Poll every 30s, up to 15 min, then fail job |
+| `Failed` | Fail job immediately: `"Embedding endpoint in Failed state"` |
+| `Deleting` | Fail job immediately: `"Embedding endpoint is being deleted"` |
+| `ValidationException` (not found) | Fail job immediately: `"Embedding endpoint is stopped — invoke embedding-start-endpoint Lambda"` |
+
+Callers do **not** trigger the start Lambda. Starting the endpoint is an operator action.
+
+---
+
+## Cost management
+
+- Stop the endpoint when not in use:
+  ```bash
+  aws lambda invoke --function-name embedding-stop-endpoint --region eu-central-1 --payload '{}' /dev/stdout
+  ```
+- Enable automatic weekday scheduling:
+  ```hcl
+  enable_endpoint_scheduler = true
+  # Default: starts 7:00 AM UTC, stops 6:00 PM UTC, Mon–Fri
+  ```
+
+---
+
+## API
+
+**Input** (`POST /invocations`):
+```json
+{
+  "texts": ["passage: text to embed", "passage: another text"],
+  "batch_size": 32
+}
+```
+
+**Output**:
+```json
+{
+  "embeddings": [[0.123, -0.456, ...], ...],
+  "dim": 1024
+}
+```
+
+**Prefix convention** (required by multilingual-e5-large's training objective):
+- `"passage: {text}"` for documents at ingest
+- `"query: {text}"` for search queries at retrieval

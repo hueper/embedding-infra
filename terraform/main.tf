@@ -19,7 +19,7 @@ provider "aws" {
 # ECR Repository for Custom Container
 # -----------------------------------------------------------------------------
 
-resource "aws_ecr_repository" "apertus_inference" {
+resource "aws_ecr_repository" "embedding_inference" {
   name                 = "${var.project_name}-inference"
   image_tag_mutability = "IMMUTABLE"
   force_delete         = true
@@ -61,7 +61,7 @@ resource "aws_iam_role_policy" "sagemaker_execution" {
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage"
         ]
-        Resource = [aws_ecr_repository.apertus_inference.arn]
+        Resource = [aws_ecr_repository.embedding_inference.arn]
       },
       {
         Sid      = "ECRAuth"
@@ -91,17 +91,16 @@ resource "time_sleep" "iam_propagation" {
 }
 
 # SageMaker Model
-resource "aws_sagemaker_model" "apertus" {
-  name               = "${var.project_name}-apertus-70b"
+resource "aws_sagemaker_model" "embedding" {
+  name               = "${var.project_name}-multilingual-e5-large"
   execution_role_arn = aws_iam_role.sagemaker_role.arn
   depends_on         = [time_sleep.iam_propagation]
 
   primary_container {
-    image = "${aws_ecr_repository.apertus_inference.repository_url}:${var.image_tag}"
+    image = "${aws_ecr_repository.embedding_inference.repository_url}:${var.image_tag}"
     environment = {
-      HF_MODEL_ID = "swiss-ai/Apertus-70B-Instruct-2509"
-      AWS_REGION  = var.aws_region
-      SM_NUM_GPUS = "8"
+      MODEL_NAME = "intfloat/multilingual-e5-large"
+      AWS_REGION = var.aws_region
     }
   }
 }
@@ -109,22 +108,22 @@ resource "aws_sagemaker_model" "apertus" {
 # The endpoint is intentionally ephemeral: created/deleted by the Lambda functions.
 # Terraform manages the endpoint configuration but NOT the endpoint itself.
 # BOOTSTRAP: After first `terraform apply`, create the endpoint by invoking:
-#   aws lambda invoke --function-name apertus-llm-start-endpoint --payload '{}' /dev/stdout
+#   aws lambda invoke --function-name embedding-start-endpoint --payload '{}' /dev/stdout
 locals {
-  endpoint_name        = "${var.project_name}-apertus-endpoint"
-  endpoint_config_name = aws_sagemaker_endpoint_configuration.apertus.name
+  endpoint_name        = "${var.project_name}-embedding-endpoint"
+  endpoint_config_name = aws_sagemaker_endpoint_configuration.embedding.name
 }
 
 # SageMaker Endpoint Configuration
-resource "aws_sagemaker_endpoint_configuration" "apertus" {
-  name = "${var.project_name}-apertus-config"
+resource "aws_sagemaker_endpoint_configuration" "embedding" {
+  name = "${var.project_name}-embedding-config"
 
   production_variants {
     variant_name                                      = "primary"
-    model_name                                        = aws_sagemaker_model.apertus.name
+    model_name                                        = aws_sagemaker_model.embedding.name
     initial_instance_count                            = 1
     instance_type                                     = var.instance_type
-    container_startup_health_check_timeout_in_seconds = 900
+    container_startup_health_check_timeout_in_seconds = 600
   }
 }
 
@@ -136,5 +135,5 @@ output "endpoint_name" {
 
 output "ecr_repository_url" {
   description = "ECR repository URL for the custom inference image"
-  value       = aws_ecr_repository.apertus_inference.repository_url
+  value       = aws_ecr_repository.embedding_inference.repository_url
 }

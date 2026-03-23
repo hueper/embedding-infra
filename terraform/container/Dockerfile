@@ -1,14 +1,30 @@
-ARG BASE_IMAGE
-FROM ${BASE_IMAGE}
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir fastapi uvicorn httpx && \
-    pip install --no-cache-dir \
-        transformers \
-        accelerate
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin torch to a known-good CUDA 11.8 wheel
+RUN python3.11 -m pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    sentence-transformers \
+    torch==2.1.0 --index-url https://download.pytorch.org/whl/cu118
+
+# Pre-bake model weights into the image at build time.
+# This avoids a cold-download on every container start (~500 MB model).
+# Model: intfloat/multilingual-e5-large (560M params, 1024-dim, Apache 2.0)
+RUN python3.11 -c "\
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('intfloat/multilingual-e5-large'); \
+print('Model weights downloaded successfully')"
 
 COPY serve.py /opt/serve.py
-COPY entrypoint.sh /opt/entrypoint.sh
-RUN sed -i 's/\r$//' /opt/entrypoint.sh && chmod +x /opt/entrypoint.sh
 
-ENTRYPOINT ["/bin/bash", "/opt/entrypoint.sh"]
+WORKDIR /opt
+
+# SageMaker expects the server on port 8080
+CMD ["python3.11", "-m", "uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8080"]

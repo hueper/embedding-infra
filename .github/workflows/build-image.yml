@@ -1,9 +1,9 @@
-name: Build inference image
+name: Build embedding inference image
 
 on:
   push:
     branches: [main]
-    paths: [terraform/container/**]
+    paths: [embedding-infra/terraform/container/**]
   workflow_dispatch:
 
 permissions:
@@ -11,17 +11,17 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-central-1
 
 jobs:
   build-and-push:
-    runs-on: [self-hosted, docker-heavy]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.EMBEDDING_AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - uses: aws-actions/amazon-ecr-login@v2
@@ -30,14 +30,28 @@ jobs:
       - name: Build and push
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: apertus-llm-inference
+          REPO: embedding-inference
           TAG: ${{ github.sha }}
-          BASE_IMAGE: vllm/vllm-openai:v0.11.0
         run: |
           docker build \
             --platform=linux/amd64 \
-            --build-arg BASE_IMAGE=$BASE_IMAGE \
             -t $REGISTRY/$REPO:$TAG \
-            -f terraform/container/Dockerfile \
-            terraform/container
+            -f embedding-infra/terraform/container/Dockerfile \
+            embedding-infra/terraform/container
           docker push $REGISTRY/$REPO:$TAG
+
+      - name: Remind operator to cycle endpoint
+        run: |
+          echo ""
+          echo "==========================================================="
+          echo "  IMAGE PUSHED: ${{ github.sha }}"
+          echo "  The running SageMaker endpoint is still serving the OLD image."
+          echo ""
+          echo "  To apply this image, cycle the endpoint:"
+          echo "    1. aws lambda invoke --function-name embedding-stop-endpoint \\"
+          echo "         --region eu-central-1 --payload '{}' /dev/stdout"
+          echo "    2. terraform apply -var=image_tag=${{ github.sha }} ..."
+          echo "    3. aws lambda invoke --function-name embedding-start-endpoint \\"
+          echo "         --region eu-central-1 --payload '{}' /dev/stdout"
+          echo "==========================================================="
+          echo ""

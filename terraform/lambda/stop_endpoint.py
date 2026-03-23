@@ -14,7 +14,7 @@ def lambda_handler(event, context):
     Handles all endpoint states for idempotency.
     """
     endpoint_name = os.environ["ENDPOINT_NAME"]
-    region = os.environ.get("AWS_REGION", "us-east-1")
+    region = os.environ.get("AWS_REGION", "eu-central-1")
 
     sagemaker = boto3.client("sagemaker", region_name=region)
 

@@ -1,16 +1,16 @@
 variable "aws_region" {
   description = "AWS region for deployment"
-  default     = "us-east-1"
+  default     = "eu-central-1"
 }
 
 variable "project_name" {
   description = "Project name prefix for resources"
-  default     = "apertus-llm"
+  default     = "embedding"
 }
 
 variable "instance_type" {
   description = "SageMaker instance type"
-  default     = "ml.g5.48xlarge"
+  default     = "ml.g5.xlarge"
 }
 
 variable "image_tag" {
@@ -21,6 +21,12 @@ variable "image_tag" {
 variable "github_repo" {
   description = "GitHub repository (org/repo) for OIDC trust policy"
   type        = string
+}
+
+variable "create_github_oidc_provider" {
+  description = "Create the GitHub Actions OIDC provider. Set to false if it already exists in this account (e.g. created by another infra module)."
+  type        = bool
+  default     = false
 }
 
 # Endpoint Scheduler Variables
