@@ -3,7 +3,7 @@ name: Build embedding inference image
 on:
   push:
     branches: [main]
-    paths: [embedding-infra/terraform/container/**]
+    paths: [terraform/container/**]
   workflow_dispatch:
 
 permissions:
@@ -36,8 +36,8 @@ jobs:
           docker build \
             --platform=linux/amd64 \
             -t $REGISTRY/$REPO:$TAG \
-            -f embedding-infra/terraform/container/Dockerfile \
-            embedding-infra/terraform/container
+            -f terraform/container/Dockerfile \
+            terraform/container
           docker push $REGISTRY/$REPO:$TAG
 
       - name: Remind operator to cycle endpoint
