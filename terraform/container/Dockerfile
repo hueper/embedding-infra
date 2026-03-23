@@ -11,10 +11,13 @@ RUN apt-get update && apt-get install -y \
 
 # Pin torch to a known-good CUDA 11.8 wheel
 RUN python3.11 -m pip install --no-cache-dir \
+    torch==2.1.0 \
+    --extra-index-url https://download.pytorch.org/whl/cu118
+
+RUN python3.11 -m pip install --no-cache-dir \
     fastapi \
     uvicorn \
-    sentence-transformers \
-    torch==2.1.0 --index-url https://download.pytorch.org/whl/cu118
+    sentence-transformers
 
 # Pre-bake model weights into the image at build time.
 # This avoids a cold-download on every container start (~500 MB model).
