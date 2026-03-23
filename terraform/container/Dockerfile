@@ -30,7 +30,8 @@ print('Model weights downloaded successfully')"
 
 COPY serve.py /opt/serve.py
 
-WORKDIR /opt
+# SageMaker invokes the `serve` executable from PATH — CMD is ignored
+RUN printf '#!/bin/sh\nexec python3.11 -m uvicorn serve:app --host 0.0.0.0 --port 8080\n' \
+    > /usr/local/bin/serve && chmod +x /usr/local/bin/serve
 
-# SageMaker expects the server on port 8080
-CMD ["python3.11", "-m", "uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8080"]
+WORKDIR /opt
