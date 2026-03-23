@@ -4,7 +4,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
     python3.11 \
-    python3.11-pip \
+    python3.11-distutils \
+    curl \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin torch to a known-good CUDA 11.8 wheel
