@@ -17,7 +17,7 @@ RUN python3.11 -m pip install --no-cache-dir \
 RUN python3.11 -m pip install --no-cache-dir \
     fastapi \
     uvicorn \
-    numpy \
+    "numpy<2" \
     "transformers==4.44.2" \
     sentence-transformers
 
